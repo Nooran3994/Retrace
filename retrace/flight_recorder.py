@@ -20,30 +20,29 @@ HOOK_BASH = r"""
 # --- Retrace flight recorder hook (bash) ---
 _retrace_spool="${XDG_DATA_HOME:-$HOME/.local/share}/retrace/spool"
 mkdir -p "$_retrace_spool"
+
 _retrace_pre() {
+  # Write the PREVIOUS command's record (exit code from $? is still valid
+  # at the start of the next DEBUG trap), then capture the new command.
+  if [ -n "${_retrace_cmd:-}" ]; then
+    local code=$?
+    local end=$(date +%s%N)
+    local dur=$(( (end - _retrace_start) / 1000000 ))
+    local line
+    line=$(printf '{"ts":%s,"shell":"bash","cmd":%s,"cwd":%s,"exit":%d,"dur_ms":%d}' \
+      "$(date +%s)" "$(printf '%s' "$_retrace_cmd" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')" \
+      "$(printf '%s' "$_retrace_pwd" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')" \
+      "$code" "$dur")
+    printf '%s\n' "$line" >> "$_retrace_spool/flight.jsonl"
+  fi
   _retrace_cmd="$BASH_COMMAND"
   _retrace_start=$(date +%s%N)
   _retrace_pwd="$PWD"
 }
-_retrace_post() {
-  local code=$?
-  local end=$(date +%s%N)
-  local dur=$(( (end - _retrace_start) / 1000000 ))
-  local line
-  line=$(printf '{"ts":%s,"shell":"bash","cmd":%s,"cwd":%s,"exit":%d,"dur_ms":%d}' \
-    "$(date +%s)" "$(printf '%s' "$_retrace_cmd" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')" \
-    "$(printf '%s' "$_retrace_pwd" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')" \
-    "$code" "$dur")
-  printf '%s\n' "$line" >> "$_retrace_spool/flight.jsonl"
-}
+
 trap '_retrace_pre' DEBUG
-trap '_retrace_post' DEBUG
+PROMPT_COMMAND='_retrace_pre'
 """
-
-
-def spool_path() -> Path:
-    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return base / "retrace" / "spool" / "flight.jsonl"
 
 
 def install_bash_hook(rc_path: Path | None = None) -> Path:
@@ -55,6 +54,11 @@ def install_bash_hook(rc_path: Path | None = None) -> Path:
     with rc.open("a", encoding="utf-8") as f:
         f.write("\n" + HOOK_BASH + "\n")
     return rc
+
+
+def spool_path() -> Path:
+    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / "retrace" / "spool" / "flight.jsonl"
 
 
 def ingest_spool(conn) -> dict:
