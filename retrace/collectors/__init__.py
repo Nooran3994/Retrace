@@ -1,0 +1,1 @@
+"""Collectors — ingest existing terminal history from the machine."""

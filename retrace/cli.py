@@ -1,0 +1,138 @@
+"""Retrace CLI — `retrace` / `rec`.
+
+Commands:
+  retrace ingest                 Ingest existing shell history into the DB
+  retrace ingest --flight        Load flight-recorder spool into the DB
+  retrace hook install           Install the bash flight-recorder hook
+  retrace search <query>         Search captured commands
+  retrace stats                  Show aggregate stats
+  retrace export --format jsonl  Export records (default: to stdout)
+"""
+
+import argparse
+import json
+import sys
+import time
+
+from . import __version__
+from .db import connect, default_db_path, search, stats
+
+
+def cmd_ingest(args) -> None:
+    conn = connect()
+    from .collectors.history import ingest_history
+
+    results = ingest_history(conn)
+    total = sum(results.values())
+    print(f"Ingested {total} history records: {results}")
+
+    if args.flight:
+        from .flight_recorder import ingest_spool
+
+        spool = ingest_spool(conn)
+        print(f"Flight spool: {spool['loaded']} loaded, {spool['skipped']} skipped")
+
+    conn.close()
+
+
+def cmd_hook(args) -> None:
+    from .flight_recorder import install_bash_hook
+
+    rc = install_bash_hook()
+    print(f"Flight recorder hook installed in {rc}")
+    print("Open a NEW terminal for it to take effect.")
+
+
+def cmd_search(args) -> None:
+    conn = connect()
+    since = time.time() - args.since * 60 if args.since else None
+    rows = search(conn, args.query, limit=args.limit, since=since)
+    if not rows:
+        print("No matches.")
+        conn.close()
+        return
+    for r in rows:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"])) if r["ts"] else "?"
+        git = f" [{r['git_repo']}@{r['git_branch']}]" if r.get("git_repo") else ""
+        print(f"{r['id']}  {ts}  {r['shell']:<4} {r['command']}{git}")
+    conn.close()
+
+
+def cmd_stats(args) -> None:
+    conn = connect()
+    s = stats(conn)
+    print(f"Total records: {s['total']}")
+    print(f"By source:     {s['by_source']}")
+    if s["last_ts"]:
+        print(f"Last capture:  {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(s['last_ts']))}")
+    conn.close()
+
+
+def cmd_export(args) -> None:
+    conn = connect()
+    rows = conn.execute("SELECT * FROM commands ORDER BY ts").fetchall()
+    cols = [d[0] for d in conn.execute("SELECT * FROM commands LIMIT 0").description]
+    records = [dict(zip(cols, r)) for r in rows]
+
+    if args.format == "jsonl":
+        payload = "\n".join(json.dumps(r) for r in records) + ("\n" if records else "")
+    elif args.format == "csv":
+        import csv
+        import io
+
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=cols)
+        writer.writeheader()
+        writer.writerows(records)
+        payload = buf.getvalue()
+    else:
+        payload = json.dumps(records, indent=2)
+
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(payload)
+        print(f"Exported {len(records)} records to {args.output}")
+    else:
+        sys.stdout.write(payload)
+    conn.close()
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(prog="retrace", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"retrace {__version__}")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_ingest = sub.add_parser("ingest", help="Ingest existing history into the DB")
+    p_ingest.add_argument("--flight", action="store_true", help="Also load flight spool")
+    p_ingest.set_defaults(func=cmd_ingest)
+
+    p_hook = sub.add_parser("hook", help="Manage the flight recorder hook")
+    p_hook_sub = p_hook.add_subparsers(dest="hook_cmd", required=True)
+    p_hook_install = p_hook_sub.add_parser("install", help="Install bash hook")
+    p_hook_install.set_defaults(func=cmd_hook)
+
+    p_search = sub.add_parser("search", help="Search captured commands")
+    p_search.add_argument("query")
+    p_search.add_argument("--limit", type=int, default=50)
+    p_search.add_argument("--since", type=float, default=0, help="Minutes back")
+    p_search.set_defaults(func=cmd_search)
+
+    p_stats = sub.add_parser("stats", help="Show aggregate stats")
+    p_stats.set_defaults(func=cmd_stats)
+
+    p_export = sub.add_parser("export", help="Export records")
+    p_export.add_argument("--format", choices=["jsonl", "csv", "json"], default="jsonl")
+    p_export.add_argument("--output", help="Output file (default: stdout)")
+    p_export.set_defaults(func=cmd_export)
+
+    args = parser.parse_args(argv)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
