@@ -78,20 +78,28 @@ def _query_channel(channel: str, event_ids: str, minutes: int) -> list[dict]:
     since_ms = int(time.time() * 1000) - minutes * 60_000
     # Filter to the last N minutes by StartTime to keep the payload small.
     script = f"""
-$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
 $since = [DateTimeOffset]::FromUnixTimeMilliseconds({since_ms}).LocalDateTime
-Get-WinEvent -FilterHashtable @{{LogName='{channel}'; StartTime=$since; Id=@({event_ids})}} |
-  Select-Object -First 200 |
-  ForEach-Object {{
-    [PSCustomObject]@{{
-      ts = $_.TimeCreated.ToUniversalTime().ToString('o')
-      id = $_.Id
-      level = $_.LevelDisplayName
-      provider = $_.ProviderName
-      message = ($_.Message -replace "\\r?\\n", " " -replace '\\s+', ' ').Substring(0, [Math]::Min(400, ($_.Message -replace "\\r?\\n", " " -replace '\\s+', ' ').Length))
-      machine = $env:COMPUTERNAME
-    }} | ConvertTo-Json -Compress
-  }}
+$ids = @({event_ids}) -split ',' | ForEach-Object {{ [int]$_ }}
+try {{
+  Get-WinEvent -FilterHashtable @{{LogName='{channel}'; StartTime=$since; Id=$ids}} -ErrorAction Stop |
+    Select-Object -First 200 |
+    ForEach-Object {{
+      $msg = ($_.Message -replace "\\r?\\n", " " -replace '\\s+', ' ').Trim()
+      if ($msg.Length -gt 400) {{ $msg = $msg.Substring(0, 400) }}
+      [PSCustomObject]@{{
+        ts = $_.TimeCreated.ToUniversalTime().ToString('o')
+        id = $_.Id
+        level = $_.LevelDisplayName
+        provider = $_.ProviderName
+        message = $msg
+        machine = $env:COMPUTERNAME
+      }} | ConvertTo-Json -Compress
+    }}
+}} catch {{
+  # Channel inaccessible (e.g. Security without elevation) -> skip, not fatal
+  Write-Output ''
+}}
 """
     try:
         out = subprocess.run(
@@ -126,7 +134,7 @@ def collect(conn, minutes: int = 60, channels: list[str] | None = None) -> dict:
     if not _ps_available():
         return {"error": "PowerShell not available (Windows or WSL interop required)"}
 
-    wanted = channels or list(CHANNELS)
+    wanted = channels or [c for c, _ in CHANNELS]
     results: dict[str, int] = {}
     for channel, source in CHANNELS:
         if channel not in wanted and source not in wanted:
