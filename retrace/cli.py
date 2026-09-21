@@ -9,6 +9,7 @@ Commands:
   retrace win-events             Collect Windows Event Log entries
   retrace search <query>         Search captured commands
   retrace stats                  Show aggregate stats
+  retrace detect                 Run rule-based detectors over recent records
   retrace export --format jsonl  Export records (default: to stdout)
 """
 
@@ -105,6 +106,33 @@ def cmd_stats(args) -> None:
     conn.close()
 
 
+def cmd_detect(args) -> None:
+    """Run rule-based detectors and print alerts."""
+    conn = connect()
+    from .detectors import detect, write_default_config
+
+    if args.init_config:
+        path = write_default_config()
+        print(f"Wrote example config to {path}")
+        conn.close()
+        return
+
+    alerts = detect(conn, since_minutes=args.since, limit=args.limit)
+    if not alerts:
+        print(f"No alerts in the last {args.since} minutes. ✓")
+        conn.close()
+        return
+
+    print(f"{len(alerts)} alert(s) in the last {args.since} minutes:")
+    for a in alerts:
+        ts = time.strftime("%H:%M:%S", time.localtime(a["last_ts"]))
+        print(f"  [{a['severity'].upper():<8}] {a['rule']}  @ {ts}")
+        print(f"           {a['message']}")
+        if a["count"] > 1:
+            print(f"           ({a['count']} occurrences)")
+    conn.close()
+
+
 def cmd_export(args) -> None:
     conn = connect()
     rows = conn.execute("SELECT * FROM commands ORDER BY ts").fetchall()
@@ -165,6 +193,12 @@ def main(argv=None) -> int:
 
     p_stats = sub.add_parser("stats", help="Show aggregate stats")
     p_stats.set_defaults(func=cmd_stats)
+
+    p_detect = sub.add_parser("detect", help="Run rule-based detectors over recent records")
+    p_detect.add_argument("--since", type=int, default=60, help="Look back window in minutes (default 60)")
+    p_detect.add_argument("--limit", type=int, default=2000, help="Max rows to evaluate (default 2000)")
+    p_detect.add_argument("--init-config", action="store_true", help="Write example detectors.json and exit")
+    p_detect.set_defaults(func=cmd_detect)
 
     p_export = sub.add_parser("export", help="Export records")
     p_export.add_argument("--format", choices=["jsonl", "csv", "json"], default="jsonl")
