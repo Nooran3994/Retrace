@@ -133,6 +133,21 @@ def cmd_detect(args) -> None:
     conn.close()
 
 
+
+def cmd_web(args) -> None:
+    """Start the local-only web UI."""
+    from .webui import serve
+
+    serve(port=args.port)
+
+
+def cmd_watch(args) -> None:
+    """Run the watch daemon (periodic ingest + detection)."""
+    from .watch import loop
+
+    loop(interval_s=args.interval, once=args.once)
+
+
 def cmd_export(args) -> None:
     conn = connect()
     rows = conn.execute("SELECT * FROM commands ORDER BY ts").fetchall()
@@ -199,6 +214,16 @@ def main(argv=None) -> int:
     p_detect.add_argument("--limit", type=int, default=2000, help="Max rows to evaluate (default 2000)")
     p_detect.add_argument("--init-config", action="store_true", help="Write example detectors.json and exit")
     p_detect.set_defaults(func=cmd_detect)
+
+
+    p_web = sub.add_parser("web", help="Start local-only web UI (127.0.0.1)")
+    p_web.add_argument("--port", type=int, default=8765)
+    p_web.set_defaults(func=cmd_web)
+
+    p_watch = sub.add_parser("watch", help="Watch daemon: periodic ingest + detect")
+    p_watch.add_argument("--interval", type=int, default=60, help="Seconds between cycles")
+    p_watch.add_argument("--once", action="store_true", help="Run one cycle and exit")
+    p_watch.set_defaults(func=cmd_watch)
 
     p_export = sub.add_parser("export", help="Export records")
     p_export.add_argument("--format", choices=["jsonl", "csv", "json"], default="jsonl")

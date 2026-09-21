@@ -87,8 +87,8 @@ def _parse_transcript(text: str) -> list[dict]:
 
 def ingest_transcripts(conn) -> dict:
     """Parse & load all unprocessed transcript files (idempotent)."""
-    from ..db import insert_command
-    from ..redact import redact_line, is_high_entropy
+    from .db import insert_command
+    from .redact import redact_line, is_high_entropy
 
     conn.execute(
         """CREATE TABLE IF NOT EXISTS ps_ingested (

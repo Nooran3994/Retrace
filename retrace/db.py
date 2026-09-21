@@ -33,6 +33,22 @@ CREATE TABLE IF NOT EXISTS commands (
 CREATE INDEX IF NOT EXISTS idx_commands_ts ON commands (ts);
 CREATE INDEX IF NOT EXISTS idx_commands_source ON commands (source);
 CREATE INDEX IF NOT EXISTS idx_commands_git ON commands (git_repo, git_branch);
+CREATE TABLE IF NOT EXISTS alerts (
+    id          TEXT PRIMARY KEY,
+    ts          REAL NOT NULL,
+    rule        TEXT NOT NULL,
+    severity    TEXT NOT NULL,
+    message     TEXT,
+    count       INTEGER DEFAULT 1,
+    first_ts    REAL,
+    last_ts     REAL,
+    samples     TEXT,
+    acked       INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts (ts);
+CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts (severity);
+
 """
 
 
