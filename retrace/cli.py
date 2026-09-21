@@ -3,7 +3,10 @@
 Commands:
   retrace ingest                 Ingest existing shell history into the DB
   retrace ingest --flight        Load flight-recorder spool into the DB
+  retrace ingest --ps            Load PowerShell transcripts into the DB
   retrace hook install           Install the bash flight-recorder hook
+  retrace hook install-ps        Install the PowerShell transcript hook
+  retrace win-events             Collect Windows Event Log entries
   retrace search <query>         Search captured commands
   retrace stats                  Show aggregate stats
   retrace export --format jsonl  Export records (default: to stdout)
@@ -20,27 +23,61 @@ from .db import connect, default_db_path, search, stats
 
 def cmd_ingest(args) -> None:
     conn = connect()
-    from .collectors.history import ingest_history
+    results = {}
+    if args.history:
+        from .collectors.history import ingest_history
 
-    results = ingest_history(conn)
-    total = sum(results.values())
-    print(f"Ingested {total} history records: {results}")
-
+        results = ingest_history(conn)
+        total = sum(results.values())
+        print(f"Ingested {total} history records: {results}")
     if args.flight:
         from .flight_recorder import ingest_spool
 
         spool = ingest_spool(conn)
         print(f"Flight spool: {spool['loaded']} loaded, {spool['skipped']} skipped")
+    if args.ps:
+        from .ps_transcript import ingest_transcripts
 
+        ps = ingest_transcripts(conn)
+        print(f"PowerShell transcripts: {ps['loaded']} loaded, {ps['skipped']} skipped, {ps['files']} files")
+    if not (args.history or args.flight or args.ps):
+        from .collectors.history import ingest_history
+
+        results = ingest_history(conn)
+        total = sum(results.values())
+        print(f"Ingested {total} history records: {results}")
     conn.close()
 
 
 def cmd_hook(args) -> None:
-    from .flight_recorder import install_bash_hook
+    if args.hook_cmd == "install":
+        from .flight_recorder import install_bash_hook
 
-    rc = install_bash_hook()
-    print(f"Flight recorder hook installed in {rc}")
-    print("Open a NEW terminal for it to take effect.")
+        rc = install_bash_hook()
+        print(f"Flight recorder hook installed in {rc}")
+        print("Open a NEW terminal for it to take effect.")
+    elif args.hook_cmd == "install-ps":
+        from .ps_transcript import install_ps_hook
+
+        profile = install_ps_hook()
+        print(f"PowerShell transcript hook installed in {profile}")
+        print("Open a NEW PowerShell window for it to take effect.")
+
+
+def cmd_win_events(args) -> None:
+    conn = connect()
+    from .collectors.windows_events import collect
+
+    results = collect(conn, minutes=args.minutes, channels=args.channels)
+    if "error" in results:
+        print(f"Error: {results['error']}", file=sys.stderr)
+        conn.close()
+        return
+    total = sum(results.values())
+    print(f"Collected {total} Windows events:")
+    for source, count in results.items():
+        print(f"  {source}: {count}")
+    conn.close()
 
 
 def cmd_search(args) -> None:
@@ -104,12 +141,21 @@ def main(argv=None) -> int:
 
     p_ingest = sub.add_parser("ingest", help="Ingest existing history into the DB")
     p_ingest.add_argument("--flight", action="store_true", help="Also load flight spool")
+    p_ingest.add_argument("--ps", action="store_true", help="Load PowerShell transcripts")
+    p_ingest.add_argument("--history", action="store_true", help="Load shell history (default)")
     p_ingest.set_defaults(func=cmd_ingest)
 
     p_hook = sub.add_parser("hook", help="Manage the flight recorder hook")
     p_hook_sub = p_hook.add_subparsers(dest="hook_cmd", required=True)
     p_hook_install = p_hook_sub.add_parser("install", help="Install bash hook")
     p_hook_install.set_defaults(func=cmd_hook)
+    p_hook_install_ps = p_hook_sub.add_parser("install-ps", help="Install PowerShell transcript hook")
+    p_hook_install_ps.set_defaults(func=cmd_hook)
+
+    p_win = sub.add_parser("win-events", help="Collect Windows Event Log entries")
+    p_win.add_argument("--minutes", type=int, default=60, help="Look back window (default 60)")
+    p_win.add_argument("--channels", nargs="*", help="Specific channels (Security, System, Application, PowerShell)")
+    p_win.set_defaults(func=cmd_win_events)
 
     p_search = sub.add_parser("search", help="Search captured commands")
     p_search.add_argument("query")
