@@ -1,0 +1,24 @@
+[Unit]
+Description=Retrace agent — persistent capture, detect, model loop
+Documentation=https://github.com/Nooran3994/Retrace
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/c/Users/HP/OneDrive/Desktop/SYSTEMS/SCAAI_SYSTEMS/Retrace
+ExecStart=/usr/bin/python3 -m retrace.agent --interval 60
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The agent writes ONLY to its own data dir (DB, spool, state).
+ReadWritePaths=/home/alfred/.local/share/retrace
+PrivateTmp=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=default.target

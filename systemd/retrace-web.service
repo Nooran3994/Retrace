@@ -1,0 +1,20 @@
+[Unit]
+Description=Retrace web UI — localhost-only timeline (127.0.0.1:8765)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/c/Users/HP/OneDrive/Desktop/SYSTEMS/SCAAI_SYSTEMS/Retrace
+ExecStart=/usr/bin/python3 -m retrace.cli web --port 8765
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The web UI persists alert acks + runs detect (writes alerts).
+ReadWritePaths=/home/alfred/.local/share/retrace
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

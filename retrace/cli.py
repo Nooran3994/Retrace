@@ -218,6 +218,12 @@ def cmd_watch(args) -> None:
     loop(interval_s=args.interval, once=args.once)
 
 
+def cmd_agent(args) -> None:
+    """Run the persistent agent loop."""
+    from .agent import loop
+    loop(interval_s=args.interval, once=args.once, include_model=not args.no_model)
+
+
 def cmd_export(args) -> None:
     conn = connect()
     rows = conn.execute("SELECT * FROM commands ORDER BY ts").fetchall()
@@ -316,6 +322,12 @@ def main(argv=None) -> int:
     p_watch.add_argument("--interval", type=int, default=60, help="Seconds between cycles")
     p_watch.add_argument("--once", action="store_true", help="Run one cycle and exit")
     p_watch.set_defaults(func=cmd_watch)
+
+    p_agent = sub.add_parser("agent", help="Persistent agent loop (systemd-friendly)")
+    p_agent.add_argument("--interval", type=int, default=60, help="Seconds between cycles (default 60)")
+    p_agent.add_argument("--once", action="store_true", help="Run one cycle and exit")
+    p_agent.add_argument("--no-model", action="store_true", help="Skip model analysis even if enabled")
+    p_agent.set_defaults(func=cmd_agent)
 
     p_export = sub.add_parser("export", help="Export records")
     p_export.add_argument("--format", choices=["jsonl", "csv", "json"], default="jsonl")
