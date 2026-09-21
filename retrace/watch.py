@@ -3,8 +3,9 @@
 Runs a loop that:
   1. Ingests shell history, flight spool, PS transcripts
   2. Collects Windows Event Log entries (if available)
-  3. Runs rule-based detectors and persists alerts
-  4. Sleeps for the configured interval
+  3. Collects from registered remote hosts (agentless SSH)
+  4. Runs rule-based detectors and persists alerts
+  5. Sleeps for the configured interval
 
 Designed to run under systemd (Linux/WSL) or Task Scheduler (Windows).
 """
@@ -16,7 +17,7 @@ import time
 
 def run_once(conn, verbose: bool = True) -> dict:
     """One full capture+detect cycle. Returns a summary dict."""
-    summary: dict = {"ingested": 0, "events": 0, "alerts": 0}
+    summary: dict = {"ingested": 0, "events": 0, "alerts": 0, "remote": 0}
 
     # 1. Shell history
     try:
@@ -59,7 +60,21 @@ def run_once(conn, verbose: bool = True) -> dict:
         if verbose:
             print(f"[watch] win-events failed: {exc}")
 
-    # 5. Detect + persist
+    # 5. Remote hosts (agentless SSH; only if any are registered)
+    try:
+        from . import remote
+
+        hosts = remote.load_hosts()
+        if hosts:
+            res = remote.collect_all(db_conn=conn)
+            summary["remote"] = sum(
+                r.get("loaded", 0) for r in res.values() if "error" not in r
+            )
+    except Exception as exc:
+        if verbose:
+            print(f"[watch] remote collect failed: {exc}")
+
+    # 6. Detect + persist
     try:
         from .detectors import detect
         from .webui import insert_alert
@@ -89,7 +104,8 @@ def loop(interval_s: int = 60, once: bool = False, verbose: bool = True) -> None
         if verbose:
             print(
                 f"[{time.strftime('%H:%M:%S')}] ingested={summary['ingested']} "
-                f"events={summary['events']} alerts={summary['alerts']}"
+                f"events={summary['events']} remote={summary['remote']} "
+                f"alerts={summary['alerts']}"
             )
         if once:
             break

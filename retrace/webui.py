@@ -343,3 +343,26 @@ def serve(port: int = 8765) -> None:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
+
+
+def remotes_for_api(conn) -> list[dict]:
+    """Registered remote hosts + per-host record counts from the DB."""
+    from . import remote
+
+    out = []
+    for rec in remote.load_hosts():
+        name = rec.get("name", rec.get("host"))
+        host = rec.get("host", "")
+        user = rec.get("user")
+        count = conn.execute(
+            "SELECT COUNT(*) FROM commands WHERE source='remote' AND host=?",
+            (host,),
+        ).fetchone()[0]
+        out.append({
+            "name": name,
+            "host": host,
+            "user": user,
+            "port": rec.get("port", 22),
+            "records": count,
+        })
+    return out

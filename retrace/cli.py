@@ -7,10 +7,18 @@ Commands:
   retrace hook install           Install the bash flight-recorder hook
   retrace hook install-ps        Install the PowerShell transcript hook
   retrace win-events             Collect Windows Event Log entries
+  retrace remote add <name> <host> [--user U] [--port P]
+  retrace remote list
+  retrace remote remove <name>
+  retrace remote test <name>
+  retrace remote collect [--all | <name>]
+  retrace remote script          Print the agentless collector script
   retrace search <query>         Search captured commands
   retrace stats                  Show aggregate stats
   retrace detect                 Run rule-based detectors over recent records
   retrace export --format jsonl  Export records (default: to stdout)
+  retrace web                    Start local-only web UI (127.0.0.1:8765)
+  retrace watch                  Periodic ingest + detect daemon
 """
 
 import argparse
@@ -81,6 +89,68 @@ def cmd_win_events(args) -> None:
     conn.close()
 
 
+def cmd_remote(args) -> None:
+    """Dispatch remote subcommands."""
+    from . import remote
+
+    if args.remote_cmd == "add":
+        try:
+            rec = remote.add_host(args.name, args.host, user=args.user, port=args.port)
+            print(f"Registered remote host '{rec['name']}' -> {rec['user'] + '@' if rec['user'] else ''}{rec['host']}:{rec['port']}")
+            print("Next: run `retrace remote test <name>` to verify SSH.")
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.remote_cmd == "list":
+        hosts = remote.load_hosts()
+        if not hosts:
+            print("No remote hosts registered.")
+            return
+        print(f"{'NAME':<16} {'HOST':<32} {'USER':<12} PORT")
+        for h in hosts:
+            print(f"{h.get('name',''):<16} {h.get('host',''):<32} {h.get('user') or '-':<12} {h.get('port',22)}")
+
+    elif args.remote_cmd == "remove":
+        ok = remote.remove_host(args.name)
+        print(f"Removed '{args.name}'." if ok else f"No host named '{args.name}'.")
+
+    elif args.remote_cmd == "test":
+        try:
+            rec = remote.get_host(args.name)
+        except KeyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        ok, msg = remote.test_connection(rec)
+        print(f"{args.name}: {'OK' if ok else 'FAILED'} — {msg}")
+
+    elif args.remote_cmd == "collect":
+        conn = connect()
+        if args.all:
+            results = remote.collect_all(db_conn=conn)
+            for name, res in results.items():
+                if "error" in res:
+                    print(f"  {name}: {res['error']}")
+                else:
+                    print(f"  {name}: {res['loaded']} loaded, {res['skipped']} skipped")
+        else:
+            try:
+                rec = remote.get_host(args.name)
+            except KeyError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                conn.close()
+                sys.exit(1)
+            res = remote.collect_host(rec, db_conn=conn)
+            if "error" in res:
+                print(f"Error: {res['error']}", file=sys.stderr)
+            else:
+                print(f"{args.name}: {res['loaded']} loaded, {res['skipped']} skipped")
+        conn.close()
+
+    elif args.remote_cmd == "script":
+        print(remote.script_only())
+
+
 def cmd_search(args) -> None:
     conn = connect()
     since = time.time() - args.since * 60 if args.since else None
@@ -92,7 +162,8 @@ def cmd_search(args) -> None:
     for r in rows:
         ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"])) if r["ts"] else "?"
         git = f" [{r['git_repo']}@{r['git_branch']}]" if r.get("git_repo") else ""
-        print(f"{r['id']}  {ts}  {r['shell']:<4} {r['command']}{git}")
+        host = f" ({r['host']})" if r.get("host") else ""
+        print(f"{r['id']}  {ts}  {r['shell']:<4} {r['command']}{git}{host}")
     conn.close()
 
 
@@ -131,7 +202,6 @@ def cmd_detect(args) -> None:
         if a["count"] > 1:
             print(f"           ({a['count']} occurrences)")
     conn.close()
-
 
 
 def cmd_web(args) -> None:
@@ -200,6 +270,29 @@ def main(argv=None) -> int:
     p_win.add_argument("--channels", nargs="*", help="Specific channels (Security, System, Application, PowerShell)")
     p_win.set_defaults(func=cmd_win_events)
 
+    p_remote = sub.add_parser("remote", help="Agentless remote host collection over SSH")
+    p_remote_sub = p_remote.add_subparsers(dest="remote_cmd", required=True)
+    p_remote_add = p_remote_sub.add_parser("add", help="Register a remote host")
+    p_remote_add.add_argument("name")
+    p_remote_add.add_argument("host")
+    p_remote_add.add_argument("--user", help="SSH user (defaults to current)")
+    p_remote_add.add_argument("--port", type=int, default=22)
+    p_remote_add.set_defaults(func=cmd_remote)
+    p_remote_list = p_remote_sub.add_parser("list", help="List registered hosts")
+    p_remote_list.set_defaults(func=cmd_remote)
+    p_remote_rm = p_remote_sub.add_parser("remove", help="Remove a host")
+    p_remote_rm.add_argument("name")
+    p_remote_rm.set_defaults(func=cmd_remote)
+    p_remote_test = p_remote_sub.add_parser("test", help="Test SSH connectivity")
+    p_remote_test.add_argument("name")
+    p_remote_test.set_defaults(func=cmd_remote)
+    p_remote_collect = p_remote_sub.add_parser("collect", help="Collect from a host (or --all)")
+    p_remote_collect.add_argument("name", nargs="?", help="Host name (omit with --all)")
+    p_remote_collect.add_argument("--all", action="store_true", help="Collect from every registered host")
+    p_remote_collect.set_defaults(func=cmd_remote)
+    p_remote_script = p_remote_sub.add_parser("script", help="Print the agentless collector script")
+    p_remote_script.set_defaults(func=cmd_remote)
+
     p_search = sub.add_parser("search", help="Search captured commands")
     p_search.add_argument("query")
     p_search.add_argument("--limit", type=int, default=50)
@@ -214,7 +307,6 @@ def main(argv=None) -> int:
     p_detect.add_argument("--limit", type=int, default=2000, help="Max rows to evaluate (default 2000)")
     p_detect.add_argument("--init-config", action="store_true", help="Write example detectors.json and exit")
     p_detect.set_defaults(func=cmd_detect)
-
 
     p_web = sub.add_parser("web", help="Start local-only web UI (127.0.0.1)")
     p_web.add_argument("--port", type=int, default=8765)
