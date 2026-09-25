@@ -1,6 +1,6 @@
 """History collectors — aggregate logs that already exist on the machine.
 
-Elan's insight: the logs are already there. We don't need to record
+the logs are already there. We don't need to record
 everything from scratch; we ingest what the shells already wrote and
 normalize it into the shared schema. Redaction happens at ingest.
 """

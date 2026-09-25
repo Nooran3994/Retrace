@@ -1,6 +1,6 @@
 """Remote device collector — agentless, over SSH.
 
-Elan's insight: the logs are already on every machine. Retrace doesn't
+the logs are already on every machine. Retrace doesn't
 need an agent installed on remote devices; it pushes a small read-only
 script over SSH that reads existing history files + flight spool and
 emits normalized JSONL. The local side redacts and ingests into the
