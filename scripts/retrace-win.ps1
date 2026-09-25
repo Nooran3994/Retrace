@@ -1,4 +1,4 @@
-# retrace-win.ps1 — Windows-native Retrace launcher (Task Scheduler entry point)
+﻿# retrace-win.ps1 - Windows-native Retrace launcher (Task Scheduler entry point)
 # Installs/registers scheduled tasks:
 #   - retrace-agent : persistent capture+detect loop (runs every 1 min, restarts on failure)
 #   - retrace-web   : local-only web UI on 127.0.0.1:8765 (starts at logon, survives crash)

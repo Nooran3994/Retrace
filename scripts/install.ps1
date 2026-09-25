@@ -1,4 +1,4 @@
-# install.ps1 — Retrace one-command installer for Windows (PowerShell 5.1+)
+﻿# install.ps1 — Retrace one-command installer for Windows (PowerShell 5.1+)
 #
 # Does (idempotently):
 #   1. Verify python >= 3.9 (stdlib-only — no pip installs)
