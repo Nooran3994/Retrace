@@ -1,7 +1,10 @@
-﻿# retrace-win.ps1 - Windows-native Retrace launcher (Task Scheduler entry point)
+# retrace-win.ps1 - Windows-native Retrace launcher (Task Scheduler entry point)
 # Installs/registers scheduled tasks:
 #   - retrace-agent : persistent capture+detect loop (runs every 1 min, restarts on failure)
 #   - retrace-web   : local-only web UI on 127.0.0.1:8765 (starts at logon, survives crash)
+#
+# Task registration works WITHOUT admin: tries Register-ScheduledTask first,
+# then falls back to schtasks.exe (per-user task, no elevation required).
 #
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\retrace-win.ps1 install
@@ -33,36 +36,55 @@ if (-not $PythonExe) {
 $LogDir = Join-Path $env:LOCALAPPDATA 'retrace'
 $AgentLog = Join-Path $LogDir 'agent.log'
 $WebLog   = Join-Path $LogDir 'web.log'
-$AgentPs1 = Join-Path $RepoRoot 'scripts\retrace-run-agent.ps1'
-$WebPs1   = Join-Path $RepoRoot 'scripts\retrace-run-web.ps1'
+$AgentCmd = Join-Path $RepoRoot 'scripts\retrace-agent.cmd'
+$WebCmd   = Join-Path $RepoRoot 'scripts\retrace-web.cmd'
 $TaskAgent = 'retrace-agent'
 $TaskWeb  = 'retrace-web'
 
 function Write-Status($msg) { Write-Host "[retrace] $msg" -ForegroundColor Cyan }
 
-function New-Task($name, $ps1, $log, $triggerType) {
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`" *>> `"$log`"" `
-        -WorkingDirectory $RepoRoot
-    $trigger = switch ($triggerType) {
-        'logon'   { New-ScheduledTaskTrigger -AtLogOn }
-        'minutes' { New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) }
+# --- Register a task without requiring elevation ---
+# Tries the modern cmdlet first; if it fails (Access denied / no admin),
+# falls back to schtasks.exe which registers a per-user task fine.
+function Register-Task($name, $cmdPath, $schedule) {
+    $taskExists = $null -ne (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)
+
+    # 1) Try cmdlet path (works when elevated or when user has rights)
+    try {
+        $action = New-ScheduledTaskAction -Execute $cmdPath -WorkingDirectory $RepoRoot
+        if ($schedule -eq 'logon') {
+            $trigger = New-ScheduledTaskTrigger -AtLogOn
+        } else {
+            $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)
+        }
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Hours 0) `
+            -StartWhenAvailable -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+        Write-Status "Task '$name' registered (trigger: $schedule)"
+        return
+    } catch {
+        # Fall through to schtasks.exe
     }
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-        -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Hours 0) `
-        -StartWhenAvailable -MultipleInstances IgnoreNew
-    Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
-    Write-Status "Task '$name' registered (trigger: $triggerType)"
+
+    # 2) schtasks.exe fallback (no admin needed for current-user tasks)
+    $tr = if ($schedule -eq 'logon') { '/SC ONLOGON' } else { '/SC MINUTE /MO 1' }
+    $cmd = "`"$cmdPath`""
+    & schtasks.exe /Create /TN $name /TR $cmd $tr /F 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Status "Task '$name' registered via schtasks (trigger: $schedule)"
+    } else {
+        Write-Warning "Task '$name' registration failed. Run the installer from an elevated (Administrator) PowerShell to enable auto-start."
+    }
 }
 
 function Install-Tasks {
-    # Ensure log dir
     if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
     # Agent: run every 1 minute (persistent loop, restart-on-failure)
-    New-Task $TaskAgent $AgentPs1 $AgentLog 'minutes'
+    Register-Task $TaskAgent $AgentCmd 'minutes'
     # Web: start at logon, keep running
-    New-Task $TaskWeb $WebPs1 $WebLog 'logon'
+    Register-Task $TaskWeb $WebCmd 'logon'
 
     Write-Status "Installed. Logs: $LogDir"
     Write-Status "Start now: Start-ScheduledTask -TaskName $TaskAgent ; Start-ScheduledTask -TaskName $TaskWeb"
@@ -75,6 +97,9 @@ function Uninstall-Tasks {
             Write-Status "Task '$t' removed"
         }
     }
+    # Also clear any schtasks-registered variants
+    & schtasks.exe /Delete /TN $TaskAgent /F 2>$null | Out-Null
+    & schtasks.exe /Delete /TN $TaskWeb /F 2>$null | Out-Null
 }
 
 function Show-Status {
