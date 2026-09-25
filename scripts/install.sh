@@ -7,13 +7,14 @@
 #   2. Verify python3 >= 3.9 (Retrace is stdlib-only — NO pip installs)
 #   3. Init config + data dirs + SQLite DB
 #   4. Install the shell flight-recorder hook (bash/zsh/fish)
-#   5. Register persistence:
+#   5. Install the `retrace` launcher on PATH (works from ANY terminal/dir)
+#   6. Register persistence:
 #        - Linux / WSL2-with-systemd  -> systemd user units (agent + web)
 #        - WSL2-without-systemd       -> Windows Task Scheduler (via retrace-win.ps1)
-#   6. Start the local-only web UI (127.0.0.1:8765)
-#   7. Print a summary + next commands
+#   7. Start the local-only web UI (127.0.0.1:8765)
+#   8. Print a summary + next commands
 #
-# Safe to re-run: hooks and units are never duplicated.
+# Safe to re-run: hooks, units, and PATH entries are never duplicated.
 #
 # Usage:
 #   ./scripts/install.sh
@@ -72,7 +73,6 @@ ok "python $PY_VER (stdlib-only, no pip needed)"
 # ────────────────────────────────────────────────────────────────
 info "Initialising database and config directories…"
 "$PYTHON" -m retrace.cli stats >/dev/null 2>&1 || {
-    # 'stats' auto-creates the DB via connect(); if it failed, surface why
     "$PYTHON" -m retrace.cli stats || fail "DB init failed — see error above."
 }
 ok "database ready ($("$PYTHON" -m retrace.cli stats 2>/dev/null | head -1))"
@@ -87,11 +87,31 @@ if [[ "${RETRACE_NO_HOOK:-0}" != "1" ]]; then
 fi
 
 # ────────────────────────────────────────────────────────────────
-# 5. Register persistence
+# 5. Install the `retrace` launcher on PATH
+#    This is what makes `retrace` work from ANY terminal and ANY
+#    directory — without pip, venv, or admin rights.
+# ────────────────────────────────────────────────────────────────
+info "Installing 'retrace' launcher on PATH…"
+mkdir -p "$HOME/.local/bin"
+LAUNCHER_SRC="$REPO_ROOT/scripts/retrace"
+if [[ -f "$LAUNCHER_SRC" ]]; then
+    ln -sf "$LAUNCHER_SRC" "$HOME/.local/bin/retrace"
+    chmod +x "$HOME/.local/bin/retrace"
+    # Ensure ~/.local/bin is on PATH for THIS shell (idempotent)
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) export PATH="$HOME/.local/bin:$PATH" ;;
+    esac
+    ok "launcher installed → run 'retrace' from any directory"
+else
+    warn "scripts/retrace launcher not found — skipping PATH install"
+fi
+
+# ────────────────────────────────────────────────────────────────
+# 6. Register persistence
 # ────────────────────────────────────────────────────────────────
 if [[ "${RETRACE_NO_PERSIST:-0}" != "1" ]]; then
     if [[ "$PLATFORM" == "wsl" && "$IS_WSL" == "1" ]]; then
-        # WSL2: prefer systemd if available; else fall back to Windows Task Scheduler
         if systemctl --user list-units >/dev/null 2>&1; then
             info "WSL with systemd — installing user units…"
             mkdir -p ~/.config/systemd/user
@@ -131,23 +151,17 @@ if [[ "${RETRACE_NO_PERSIST:-0}" != "1" ]]; then
 fi
 
 # ────────────────────────────────────────────────────────────────
-# 6. Start web UI (if enabled)
+# 7. Start web UI (if enabled)
 # ────────────────────────────────────────────────────────────────
 if [[ "${RETRACE_NO_WEB:-0}" != "1" ]]; then
     info "Starting local-only web UI on 127.0.0.1:${RETRACE_PORT}…"
-    if [[ "$PLATFORM" == "wsl" ]]; then
-        # In WSL, launch via Windows-side so the browser opens on the host
-        nohup "$PYTHON" -m retrace.cli web --port "$RETRACE_PORT" >/dev/null 2>&1 &
-        sleep 1
-    else
-        nohup "$PYTHON" -m retrace.cli web --port "$RETRACE_PORT" >/dev/null 2>&1 &
-        sleep 1
-    fi
+    nohup "$PYTHON" -m retrace.cli web --port "$RETRACE_PORT" >/dev/null 2>&1 &
+    sleep 1
     ok "web UI started — open http://127.0.0.1:${RETRACE_PORT}"
 fi
 
 # ────────────────────────────────────────────────────────────────
-# 7. Summary
+# 8. Summary
 # ────────────────────────────────────────────────────────────────
 echo
 echo "╔═══════════════════════════════════════════════════════════════╗"
@@ -156,6 +170,7 @@ echo "╠═══════════════════════�
 echo "║  Web UI :  http://127.0.0.1:${RETRACE_PORT}                         ║"
 echo "║  Data   :  ~/.local/share/retrace/rec.db                      ║"
 echo "║  Config :  ~/.config/retrace/                                 ║"
+echo "║  Launcher: retrace (on PATH — any terminal, any directory)    ║"
 echo "╠═══════════════════════════════════════════════════════════════╣"
 echo "║  Try:                                                          ║"
 echo "║    retrace stats        — see what's captured                  ║"

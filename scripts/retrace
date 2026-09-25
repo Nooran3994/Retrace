@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+#
+# retrace — self-contained launcher (POSIX sh / bash / zsh / fish).
+#
+# Makes the `retrace` command available from ANY terminal and ANY directory
+# WITHOUT requiring pip, venv, or PATH surgery beyond one symlink.
+#
+# How it works:
+#   1. Locate the Retrace repo root (this script lives in <repo>/scripts/).
+#      Symlinks are fully resolved so a ~/.local/bin/retrace symlink works.
+#   2. Ensure the repo root is on PYTHONPATH so `python3 -m retrace.cli`
+#      resolves to THIS checkout (not some stale site-packages copy).
+#   3. Exec python3 -m retrace.cli with all arguments passed through.
+#
+# Install (done automatically by install.sh / install.ps1):
+#   ln -sf "$(pwd)/scripts/retrace" ~/.local/bin/retrace
+#   # ensure ~/.local/bin is on PATH (usually is)
+#
+set -u
+
+# Resolve the real path of this script, following symlinks.
+# Works on Linux, macOS, WSL, and git-bash (which ships readlink -f).
+SCRIPT="$0"
+case "$SCRIPT" in
+    */*) ;;
+    *)   SCRIPT="$(command -v "$SCRIPT" 2>/dev/null || echo "$SCRIPT")" ;;
+esac
+if command -v readlink >/dev/null 2>&1; then
+    SCRIPT="$(readlink -f "$SCRIPT" 2>/dev/null || echo "$SCRIPT")"
+fi
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT")" 2>/dev/null && pwd)" || SCRIPT_DIR="$(pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)" || REPO_ROOT="$SCRIPT_DIR"
+
+# Prefer python3; allow override via RETRACE_PYTHON.
+PYTHON="${RETRACE_PYTHON:-python3}"
+
+# Ensure THIS repo is importable regardless of CWD or installed copies.
+export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+exec "$PYTHON" -m retrace.cli "$@"

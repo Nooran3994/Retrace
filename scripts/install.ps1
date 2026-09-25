@@ -4,9 +4,10 @@
 #   1. Verify python >= 3.9 (stdlib-only — no pip installs)
 #   2. Init config + data dirs + SQLite DB
 #   3. Install the PowerShell transcript hook
-#   4. Register Task Scheduler persistence (agent + web)
-#   5. Start the local-only web UI (127.0.0.1:8765)
-#   6. Print summary + next commands
+#   4. Install the `retrace.cmd` launcher on the user PATH
+#   5. Register Task Scheduler persistence (agent + web)
+#   6. Start the local-only web UI (127.0.0.1:8765)
+#   7. Print summary + next commands
 #
 # Usage (run from repo root):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1
@@ -55,7 +56,22 @@ if ($env:RETRACE_NO_HOOK -ne '1') {
     else { Write-Ok "transcript hook installed (open a NEW PowerShell window to activate)" }
 }
 
-# ── 4. Register Task Scheduler persistence ──
+# ── 4. Install `retrace.cmd` launcher on the USER PATH ──
+#    This is what makes `retrace` work from ANY terminal and ANY
+#    directory — without pip, venv, or admin rights.
+Write-Info "Installing 'retrace.cmd' launcher on user PATH…"
+$ScriptsDir = Join-Path $RepoRoot 'scripts'
+$UserPath = [Environment]::GetValue('Path', 'USER')
+if ($null -eq $UserPath) { $UserPath = '' }
+if ($UserPath -notlike "*$ScriptsDir*") {
+    # [Environment]::SetValue writes to the registry (permanent, no setx truncation)
+    [Environment]::SetValue('Path', "$UserPath;$ScriptsDir", 'USER')
+    Write-Ok "launcher added to user PATH — open a NEW terminal to use 'retrace'"
+} else {
+    Write-Ok "launcher already on user PATH"
+}
+
+# ── 5. Register Task Scheduler persistence ──
 if ($env:RETRACE_NO_PERSIST -ne '1') {
     Write-Info "Registering Task Scheduler tasks…"
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot 'scripts\retrace-win.ps1') install
@@ -63,7 +79,7 @@ if ($env:RETRACE_NO_PERSIST -ne '1') {
     else { Write-Ok "persistence registered (agent every 1min, web at logon)" }
 }
 
-# ── 5. Start web UI ──
+# ── 6. Start web UI ──
 if ($env:RETRACE_NO_WEB -ne '1') {
     Write-Info "Starting web UI on 127.0.0.1:$Port …"
     Start-Process -WindowStyle Hidden -FilePath $PythonExe -ArgumentList "-m","retrace.cli","web","--port","$Port"
@@ -71,17 +87,15 @@ if ($env:RETRACE_NO_WEB -ne '1') {
     Write-Ok "web UI started — http://127.0.0.1:$Port"
 }
 
-# ── 6. Summary ──
+# ── 7. Summary ──
 Write-Host ""
 Write-Host "╔═══════════════════════════════════════════════════════════════╗"
 Write-Host "║                     Retrace installed ✓                        ║"
 Write-Host "╠═══════════════════════════════════════════════════════════════╣"
-Write-Host "║  Web UI :  http://127.0.0.1:$Port" -NoNewline
-Write-Host " (localhost only)                    ║"
-Write-Host "║  Data   :  %LOCALAPPDATA%\retrace\rec.db" -NoNewline
-Write-Host "                         ║"
-Write-Host "║  Config :  %APPDATA%\retrace\" -NoNewline
-Write-Host "                                   ║"
+Write-Host "║  Web UI :  http://127.0.0.1:$Port (localhost only)             ║"
+Write-Host "║  Data   :  %LOCALAPPDATA%\retrace\rec.db                       ║"
+Write-Host "║  Config :  %APPDATA%\retrace\                                  ║"
+Write-Host "║  Launcher: retrace (on user PATH — any terminal, any directory)║"
 Write-Host "╠═══════════════════════════════════════════════════════════════╣"
 Write-Host "║  Try:                                                          ║"
 Write-Host "║    retrace stats        — see what's captured                  ║"
