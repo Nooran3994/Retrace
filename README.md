@@ -220,6 +220,9 @@ The Windows installer:
 2. Initializes config + data directories + SQLite DB (`%LOCALAPPDATA%\retrace\rec.db`)
 3. Installs the PowerShell transcript hook
 4. Registers **Task Scheduler** tasks (`retrace-agent`, `retrace-web`) for persistence
+   — uses `schtasks.exe` per-user registration when run without admin rights,
+   so it works from a normal (non-elevated) terminal; falls back to
+   `Register-ScheduledTask` when elevated
 5. Starts the local-only web UI
 6. Prints a summary
 

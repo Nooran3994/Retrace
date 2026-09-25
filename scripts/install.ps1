@@ -59,13 +59,14 @@ if ($env:RETRACE_NO_HOOK -ne '1') {
 # ── 4. Install `retrace.cmd` launcher on the USER PATH ──
 #    This is what makes `retrace` work from ANY terminal and ANY
 #    directory — without pip, venv, or admin rights.
+#    NOTE: PS 5.1 uses GetEnvironmentVariable/SetEnvironmentVariable,
+#    NOT the PS 7+ [Environment]::GetValue/SetValue methods.
 Write-Info "Installing 'retrace.cmd' launcher on user PATH…"
 $ScriptsDir = Join-Path $RepoRoot 'scripts'
-$UserPath = [Environment]::GetValue('Path', 'USER')
+$UserPath = [Environment]::GetEnvironmentVariable('Path', 'USER')
 if ($null -eq $UserPath) { $UserPath = '' }
 if ($UserPath -notlike "*$ScriptsDir*") {
-    # [Environment]::SetValue writes to the registry (permanent, no setx truncation)
-    [Environment]::SetValue('Path', "$UserPath;$ScriptsDir", 'USER')
+    [Environment]::SetEnvironmentVariable('Path', "$UserPath;$ScriptsDir", 'USER')
     Write-Ok "launcher added to user PATH — open a NEW terminal to use 'retrace'"
 } else {
     Write-Ok "launcher already on user PATH"
