@@ -396,7 +396,7 @@ async function loadAlerts(){
       "<div class='msg'><b>" + esc(al.rule) + "</b> — " + esc(al.message) +
       (al.count > 1 ? " <span class='muted'>(×" + al.count + ")</span>" : "") + "</div>" +
       "<span class='ts'>" + fmt(al.last_ts) + "</span>" +
-      (al.acked ? "" : "<button onclick=\"ack('" + al.id + "')\">ack</button>") +
+      (al.acked ? "" : '<button data-ack="' + al.id + '">ack</button>') +
       "</div>").join("");
     bump("alerts");
   } catch (e) { $("refresh").textContent = "error: " + e.message; }
@@ -427,6 +427,11 @@ async function ack(id){
   await j("/api/alerts/ack", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id: id})});
   loadAlerts();
 }
+
+document.addEventListener("click", e => {
+  const b = e.target.closest ? e.target.closest("button[data-ack]") : null;
+  if (b) ack(b.dataset.ack);
+});
 
 function switchTab(name){
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
