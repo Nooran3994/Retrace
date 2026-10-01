@@ -196,3 +196,21 @@ def db_stats(db_path=None) -> dict:
         }
     finally:
         conn.close()
+
+
+def vacuum(db_path=None) -> dict:
+    """Rebuild the database file, reclaiming space freed by retention.
+
+    Returns {"before_bytes": n, "after_bytes": m, "freed": n-m}.
+    Safe to run anytime; takes a few seconds on large DBs.
+    """
+    import os as _os
+    conn = connect(db_path)
+    try:
+        path = conn.execute("PRAGMA database_list").fetchone()[2] or ""
+        before = _os.path.getsize(path) if path and _os.path.exists(path) else 0
+        conn.execute("VACUUM")
+        after = _os.path.getsize(path) if path and _os.path.exists(path) else 0
+        return {"before_bytes": before, "after_bytes": after, "freed": max(0, before - after)}
+    finally:
+        conn.close()

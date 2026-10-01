@@ -33,7 +33,7 @@ _dashboard_cache = {"ts": 0.0, "days": 0, "data": None}
 _DASH_TTL = 60.0
 from urllib.parse import urlparse, parse_qs
 
-from .db import connect, default_db_path, retain, db_stats
+from .db import connect, default_db_path, retain, db_stats, vacuum
 
 PAGE = """<!doctype html>
 <html lang="en">
@@ -115,6 +115,7 @@ PAGE = """<!doctype html>
   <button class="tab" data-tab="timeline" onclick="switchTab('timeline')">Timeline</button>
   <button class="tab" data-tab="alerts" onclick="switchTab('alerts')">Alerts</button>
   <button class="tab" data-tab="remotes" onclick="switchTab('remotes')">Remotes</button>
+  <button class="tab" data-tab="maint" onclick="switchTab('maint')">Maintenance</button>
 </nav>
 
 <!-- ============ DASHBOARD ============ -->
@@ -167,6 +168,38 @@ PAGE = """<!doctype html>
 <div class="tabpane" id="tab-remotes">
   <div id="remotes"><div class="empty">Loading…</div></div>
 </div>
+
+<!-- ============ MAINTENANCE ============ -->
+<div class="tabpane" id="tab-maint">
+  <div class="toolbar">
+    <button onclick="loadMaint()">Refresh stats</button>
+    <span class="muted" id="maint-msg"></span>
+  </div>
+  <div class="stats" id="maint-stats"></div>
+  <div class="grid">
+    <div class="card">
+      <h2>Retention <span class="hint">prune old records</span></h2>
+      <div class="toolbar">
+        <select id="retain-days">
+          <option value="30">30 days</option>
+          <option value="60" selected>60 days</option>
+          <option value="90">90 days</option>
+          <option value="180">180 days</option>
+        </select>
+        <button onclick="doRetain()">Delete older than…</button>
+      </div>
+      <p class="muted" style="margin-top:8px;font-size:12px">Deletes command and alert rows older than the chosen window. Keeps the newest data, frees space on next vacuum.</p>
+    </div>
+    <div class="card">
+      <h2>Vacuum <span class="hint">reclaim disk space</span></h2>
+      <div class="toolbar">
+        <button onclick="doVacuum()">Run VACUUM</button>
+      </div>
+      <p class="muted" style="margin-top:8px;font-size:12px">Rebuilds the database file, reclaiming space freed by retention. Safe to run anytime; takes a few seconds on large DBs.</p>
+    </div>
+  </div>
+</div>
+
 
 <footer>Retrace — deterministic, offline terminal intelligence. No data leaves this machine.</footer>
 
@@ -433,6 +466,45 @@ document.addEventListener("click", e => {
   if (b) ack(b.dataset.ack);
 });
 
+
+async function loadMaint(){
+  try {
+    const s = await j("/api/maintenance/stats");
+    const fmtBytes = b => b > 1048576 ? (b/1048576).toFixed(1)+" MB" : b > 1024 ? (b/1024).toFixed(1)+" KB" : b+" B";
+    const cards = [
+      ["records", s.records, "stored commands"],
+      ["alerts", s.alerts, "persisted alerts"],
+      ["db size", fmtBytes(s.db_bytes), "on disk"],
+      ["oldest", s.oldest ? fmt(s.oldest) : "–", "first record"],
+      ["newest", s.newest ? fmt(s.newest) : "–", "last record"]
+    ];
+    $("maint-stats").innerHTML = cards.map(c =>
+      '<div class="stat"><div class="n">' + c[1] + '</div><div class="l">' + c[0] + '</div>' +
+      (c[2] ? '<div class="sub">' + c[2] + '</div>' : '') + '</div>').join("");
+    $("maint-msg").textContent = "";
+    bump("maint");
+  } catch (e) { $("maint-msg").textContent = "error: " + e.message; }
+}
+
+async function doRetain(){
+  const days = parseInt($("retain-days").value, 10);
+  $("maint-msg").textContent = "Pruning records older than " + days + " days…";
+  try {
+    const r = await j("/api/maintenance/retain", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({days: days})});
+    $("maint-msg").textContent = "Removed " + r.removed + " records, kept " + r.kept + " (cutoff " + r.cutoff + ")";
+    loadMaint();
+  } catch (e) { $("maint-msg").textContent = "error: " + e.message; }
+}
+
+async function doVacuum(){
+  $("maint-msg").textContent = "Running VACUUM — may take a few seconds…";
+  try {
+    const r = await j("/api/maintenance/vacuum", {method: "POST"});
+    $("maint-msg").textContent = "VACUUM complete — DB " + (r.before_bytes !== undefined ? (r.before_bytes/1048576).toFixed(1)+" MB → " + (r.after_bytes/1048576).toFixed(1)+" MB" : "");
+    loadMaint();
+  } catch (e) { $("maint-msg").textContent = "error: " + e.message; }
+}
+
 function switchTab(name){
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".tabpane").forEach(p => p.classList.toggle("active", p.id === "tab-" + name));
@@ -440,6 +512,7 @@ function switchTab(name){
   if (name === "timeline") loadRecords();
   if (name === "alerts") loadAlerts();
   if (name === "remotes") loadRemotes();
+  if (name === "maint") loadMaint();
 }
 
 function fmt(ts){
@@ -461,6 +534,7 @@ setInterval(() => {
   if (active === "timeline") loadRecords();
   if (active === "alerts") loadAlerts();
   if (active === "remotes") loadRemotes();
+  if (active === "maint") loadMaint();
 }, 20000);
 
 $("lock").textContent = "live";
@@ -528,16 +602,6 @@ class Handler(BaseHTTPRequestHandler):
                 import retrace.db as db
                 st = db.db_stats()
                 self._json(st)
-            elif path.startswith("/api/maintenance/retain"):
-                import retrace.db as db
-                import json as _json
-                try:
-                    body = _json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or b"{}")
-                    days = int(body.get("days", 60))
-                except Exception:
-                    days = 60
-                res = db.retain(days=days)
-                self._json(res)
             else:
                 self._json({"error": "not found"}, 
 
@@ -564,6 +628,8 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.loads(self.rfile.read(length) or b"{}")
                 days = int(body.get("days", 60))
                 self._json(retain(days=days))
+            elif parsed.path.startswith("/api/maintenance/vacuum"):
+                self._json(vacuum())
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as exc:
