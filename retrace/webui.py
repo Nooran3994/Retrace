@@ -761,9 +761,22 @@ def remotes_for_api(conn) -> list[dict]:
     return out
 
 
-def serve(port: int = 8765) -> None:
+def serve(port: int = 55555) -> None:
     """Start the local-only web server. Blocks forever."""
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    import os as _os
+    server = None
+    for _attempt in range(3):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            break
+        except OSError as _e:
+            print(f"Port {port} in use ({_e}). Trying port {port + 1}...")
+            port += 1
+    if server is None:
+        print("ERROR: could not bind any port. Is another Retrace UI already running?")
+        print("  - If a UI is already open, use it: http://127.0.0.1:55555")
+        print("  - Or stop the other instance first: taskkill /F /PID <pid>")
+        raise SystemExit(1)
     import threading as _th
     def _warm():
         try:
@@ -785,7 +798,7 @@ def _main() -> None:
     """CLI entrypoint: retrace webui --port N"""
     import argparse
     p = argparse.ArgumentParser(description="Retrace web UI (localhost only)")
-    p.add_argument("--port", type=int, default=8765, help="Port to bind (default 8765)")
+    p.add_argument("--port", type=int, default=55555, help="Port to bind (default 55555)")
     args = p.parse_args()
     serve(args.port)
 

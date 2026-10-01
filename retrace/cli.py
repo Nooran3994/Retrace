@@ -17,7 +17,7 @@ Commands:
   retrace stats                  Show aggregate stats
   retrace detect                 Run rule-based detectors over recent records
   retrace export --format jsonl  Export records (default: to stdout)
-  retrace web                    Start local-only web UI (127.0.0.1:8765)
+  retrace web                    Start local-only web UI (127.0.0.1:55555)
   retrace watch                  Periodic ingest + detect daemon
 """
 
@@ -315,7 +315,7 @@ def main(argv=None) -> int:
     p_detect.set_defaults(func=cmd_detect)
 
     p_web = sub.add_parser("web", help="Start local-only web UI (127.0.0.1)")
-    p_web.add_argument("--port", type=int, default=8765)
+    p_web.add_argument("--port", type=int, default=55555)
     p_web.set_defaults(func=cmd_web)
 
     p_watch = sub.add_parser("watch", help="Watch daemon: periodic ingest + detect")
