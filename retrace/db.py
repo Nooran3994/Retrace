@@ -153,3 +153,46 @@ def stats(conn) -> dict:
     ).fetchall()
     last = conn.execute("SELECT MAX(ts) FROM commands").fetchone()[0]
     return {"total": total, "by_source": dict(by_source), "last_ts": last}
+
+
+def retain(days: int = 60, db_path=None) -> dict:
+    """Delete command rows older than `days` days. Safe, reportable prune.
+
+    Returns {"removed": n, "kept": m, "cutoff": iso}. Also prunes alerts
+    older than the same cutoff. Never touches indexes or schema.
+    """
+    import time as _t
+    conn = connect(db_path)
+    cutoff = _t.time() - days * 86400
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM commands WHERE ts < ?", (cutoff,))
+        removed = cur.fetchone()[0]
+        conn.execute("DELETE FROM commands WHERE ts < ?", (cutoff,))
+        conn.execute("DELETE FROM alerts WHERE last_ts IS NOT NULL AND last_ts < ?", (cutoff,))
+        conn.commit()
+        kept = conn.execute("SELECT COUNT(*) FROM commands").fetchone()[0]
+        return {"removed": removed, "kept": kept, "cutoff": _t.strftime("%Y-%m-%d %H:%M:%S", _t.localtime(cutoff))}
+    finally:
+        conn.close()
+
+
+def db_stats(db_path=None) -> dict:
+    """Return DB size and record span — for the maintenance panel."""
+    import os as _os
+    conn = connect(db_path)
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM commands").fetchone()[0]
+        row = conn.execute("SELECT MIN(ts), MAX(ts) FROM commands").fetchone()
+        alerts = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
+        path = conn.execute("PRAGMA database_list").fetchone()[2] or ""
+        size = _os.path.getsize(path) if path and _os.path.exists(path) else 0
+        return {
+            "records": total,
+            "alerts": alerts,
+            "oldest": row[0],
+            "newest": row[1],
+            "db_path": path,
+            "db_bytes": size,
+        }
+    finally:
+        conn.close()

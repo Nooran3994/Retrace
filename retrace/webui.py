@@ -33,7 +33,7 @@ _dashboard_cache = {"ts": 0.0, "days": 0, "data": None}
 _DASH_TTL = 60.0
 from urllib.parse import urlparse, parse_qs
 
-from .db import connect, default_db_path
+from .db import connect, default_db_path, retain, db_stats
 
 PAGE = """<!doctype html>
 <html lang="en">
@@ -524,8 +524,25 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(remotes_for_api(conn))
             elif path == "/api/detect":
                 self._json(run_detect(conn))
+            elif path.startswith("/api/maintenance/stats"):
+                import retrace.db as db
+                st = db.db_stats()
+                self._json(st)
+            elif path.startswith("/api/maintenance/retain"):
+                import retrace.db as db
+                import json as _json
+                try:
+                    body = _json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or b"{}")
+                    days = int(body.get("days", 60))
+                except Exception:
+                    days = 60
+                res = db.retain(days=days)
+                self._json(res)
             else:
-                self._json({"error": "not found"}, 404)
+                self._json({"error": "not found"}, 
+
+
+404)
         except Exception as exc:  # never leak internals to the client
             self._json({"error": type(exc).__name__}, 500)
         finally:
@@ -542,6 +559,11 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.loads(self.rfile.read(length) or b"{}")
                 ack_alert(conn, body.get("id"))
                 self._json({"ok": True})
+            elif parsed.path.startswith("/api/maintenance/retain"):
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                days = int(body.get("days", 60))
+                self._json(retain(days=days))
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as exc:
