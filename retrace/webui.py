@@ -28,6 +28,9 @@ from __future__ import annotations
 import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+_dashboard_cache = {"ts": 0.0, "days": 0, "data": None}
+_DASH_TTL = 60.0
 from urllib.parse import urlparse, parse_qs
 
 from .db import connect, default_db_path
@@ -347,6 +350,7 @@ function statCards(o){
 async function loadDashboard(){
   try {
     const days = parseInt($("period").value, 10);
+    $("d-stats").innerHTML = '<div class="empty">Loading…</div>';
     const d = await j("/api/analytics/dashboard?days=" + days);
     $("d-stats").innerHTML = statCards(d.overview);
     heatmap($("c-heat"), d.heatmap.cells, d.heatmap.days);
@@ -495,7 +499,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(stats_for_api(conn))
             elif path == "/api/analytics/dashboard":
                 days = int(qs.get("days", ["30"])[0])
-                self._json(analytics_dashboard(conn, days=max(1, min(days, 365))))
+                days = max(1, min(days, 365))
+                import time as _t
+                now = _t.time()
+                if (_dashboard_cache["data"] is None or _dashboard_cache["days"] != days
+                        or now - _dashboard_cache["ts"] > _DASH_TTL):
+                    _dashboard_cache["data"] = analytics_dashboard(conn, days=days)
+                    _dashboard_cache["days"] = days
+                    _dashboard_cache["ts"] = now
+                self._json(_dashboard_cache["data"])
             elif path == "/api/records":
                 limit = int(qs.get("limit", ["100"])[0])
                 q = qs.get("q", [""])[0]
@@ -659,8 +671,31 @@ def remotes_for_api(conn) -> list[dict]:
 def serve(port: int = 8765) -> None:
     """Start the local-only web server. Blocks forever."""
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    import threading as _th
+    def _warm():
+        try:
+            conn = connect()
+            _dashboard_cache["data"] = analytics_dashboard(conn, days=30)
+            _dashboard_cache["days"] = 30
+            _dashboard_cache["ts"] = time.time()
+            conn.close()
+        except Exception:
+            pass
+    _th.Thread(target=_warm, daemon=True).start()
     print(f"Retrace UI: http://127.0.0.1:{port}  (localhost only — no network exposure)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
+
+def _main() -> None:
+    """CLI entrypoint: retrace webui --port N"""
+    import argparse
+    p = argparse.ArgumentParser(description="Retrace web UI (localhost only)")
+    p.add_argument("--port", type=int, default=8765, help="Port to bind (default 8765)")
+    args = p.parse_args()
+    serve(args.port)
+
+
+if __name__ == "__main__":
+    _main()
