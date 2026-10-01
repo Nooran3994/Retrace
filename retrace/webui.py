@@ -21,6 +21,7 @@ Routes:
   GET  /api/remotes               → registered remote hosts
   GET  /api/detect                → run detectors now, persist, return alerts
   POST /api/alerts/ack            → acknowledge alert {id}
+  GET  /api/report                → report export (?format=html|csv|json&days=)
 """
 
 from __future__ import annotations
@@ -116,6 +117,7 @@ PAGE = """<!doctype html>
   <button class="tab" data-tab="alerts" onclick="switchTab('alerts')">Alerts</button>
   <button class="tab" data-tab="remotes" onclick="switchTab('remotes')">Remotes</button>
   <button class="tab" data-tab="maint" onclick="switchTab('maint')">Maintenance</button>
+  <button class="tab" data-tab="reports" onclick="switchTab('reports')">Reports</button>
 </nav>
 
 <!-- ============ DASHBOARD ============ -->
@@ -200,6 +202,33 @@ PAGE = """<!doctype html>
   </div>
 </div>
 
+
+<!-- ============ REPORTS ============ -->
+<div class="tabpane" id="tab-reports">
+  <div class="toolbar">
+    <span class="muted">Period</span>
+    <select id="report-days">
+      <option value="7">7 days</option>
+      <option value="30" selected>30 days</option>
+      <option value="90">90 days</option>
+    </select>
+    <span class="muted">Format</span>
+    <select id="report-format">
+      <option value="html" selected>HTML (printable to PDF)</option>
+      <option value="csv">CSV (records)</option>
+      <option value="json">JSON (full payload)</option>
+    </select>
+    <button onclick="downloadReport()">⬇ Download report</button>
+    <span class="muted" id="report-msg"></span>
+  </div>
+  <div class="card">
+    <h2>Report preview <span class="hint">opens in a new tab — Ctrl+P to save as PDF</span></h2>
+    <div class="toolbar">
+      <button onclick="previewReport()">Preview in new tab</button>
+    </div>
+    <p class="muted" style="margin-top:8px;font-size:12px">The HTML report is fully self-contained (inline CSS + inline SVG) — it renders offline and prints cleanly to PDF. CSV gives the raw filtered records; JSON gives the complete analytics payload for scripting.</p>
+  </div>
+</div>
 
 <footer>Retrace — deterministic, offline terminal intelligence. No data leaves this machine.</footer>
 
@@ -505,6 +534,39 @@ async function doVacuum(){
   } catch (e) { $("maint-msg").textContent = "error: " + e.message; }
 }
 
+async function loadReports(){
+  try {
+    const days = parseInt($("report-days").value, 10);
+    const fmt = $("report-format").value;
+    $("report-msg").textContent = "";
+    bump("reports");
+  } catch (e) { $("report-msg").textContent = "error: " + e.message; }
+}
+
+function reportUrl(){
+  const days = parseInt($("report-days").value, 10);
+  const fmt = $("report-format").value;
+  return "/api/report?format=" + fmt + "&days=" + days;
+}
+
+function downloadReport(){
+  try {
+    const fmt = $("report-format").value;
+    const days = parseInt($("report-days").value, 10);
+    const a = document.createElement("a");
+    a.href = reportUrl();
+    a.download = "retrace-report-" + days + "d." + (fmt === "csv" ? "csv" : fmt === "json" ? "json" : "html");
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    $("report-msg").textContent = "Download started — " + fmt.toUpperCase() + " · " + days + " days";
+  } catch (e) { $("report-msg").textContent = "error: " + e.message; }
+}
+
+function previewReport(){
+  window.open(reportUrl(), "_blank");
+}
+
 function switchTab(name){
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".tabpane").forEach(p => p.classList.toggle("active", p.id === "tab-" + name));
@@ -513,6 +575,7 @@ function switchTab(name){
   if (name === "alerts") loadAlerts();
   if (name === "remotes") loadRemotes();
   if (name === "maint") loadMaint();
+  if (name === "reports") loadReports();
 }
 
 function fmt(ts){
@@ -535,6 +598,7 @@ setInterval(() => {
   if (active === "alerts") loadAlerts();
   if (active === "remotes") loadRemotes();
   if (active === "maint") loadMaint();
+  if (active === "reports") loadReports();
 }, 20000);
 
 $("lock").textContent = "live";
@@ -602,6 +666,20 @@ class Handler(BaseHTTPRequestHandler):
                 import retrace.db as db
                 st = db.db_stats()
                 self._json(st)
+            elif path.startswith("/api/report"):
+                from . import reports
+                fmt = qs.get("format", ["html"])[0]
+                days = int(qs.get("days", ["30"])[0])
+                days = max(1, min(days, 365))
+                if fmt == "csv":
+                    body = reports.make_csv(conn, since_days=days).encode("utf-8")
+                    self._send(200, body, "text/csv; charset=utf-8")
+                elif fmt == "json":
+                    body = reports.make_json(conn, since_days=days).encode("utf-8")
+                    self._send(200, body, "application/json; charset=utf-8")
+                else:
+                    body = reports.make_html_report(conn, since_days=days).encode("utf-8")
+                    self._send(200, body, "text/html; charset=utf-8")
             else:
                 self._json({"error": "not found"}, 
 
