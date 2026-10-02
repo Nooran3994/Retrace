@@ -118,6 +118,7 @@ PAGE = """<!doctype html>
   <button class="tab" data-tab="remotes" onclick="switchTab('remotes')">Remotes</button>
   <button class="tab" data-tab="maint" onclick="switchTab('maint')">Maintenance</button>
   <button class="tab" data-tab="reports" onclick="switchTab('reports')">Reports</button>
+  <button class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</button>
 </nav>
 
 <!-- ============ DASHBOARD ============ -->
@@ -227,6 +228,92 @@ PAGE = """<!doctype html>
       <button onclick="previewReport()">Preview in new tab</button>
     </div>
     <p class="muted" style="margin-top:8px;font-size:12px">The HTML report is fully self-contained (inline CSS + inline SVG) — it renders offline and prints cleanly to PDF. CSV gives the raw filtered records; JSON gives the complete analytics payload for scripting.</p>
+  </div>
+</div>
+
+<!-- ============ SETTINGS ============ -->
+<div class="tabpane" id="tab-settings">
+  <div class="toolbar">
+    <button onclick="loadSettings()">Refresh</button>
+    <span class="muted" id="settings-msg"></span>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <h2>Model provider <span class="hint">optional local analysis</span></h2>
+      <div style="display:grid;grid-template-columns:110px 1fr;gap:6px;align-items:center">
+        <span class="muted">Provider</span>
+        <select id="cfg-provider">
+          <option value="null">null (off)</option>
+          <option value="ollama">ollama (local)</option>
+          <option value="openai">openai-compatible</option>
+        </select>
+        <span class="muted">Model</span>
+        <input type="text" id="cfg-model" placeholder="llama3.2:3b">
+        <span class="muted">URL</span>
+        <input type="text" id="cfg-url" placeholder="http://127.0.0.1:11434">
+        <span class="muted">Timeout (s)</span>
+        <input type="number" id="cfg-timeout" value="60">
+        <span class="muted">Max chars</span>
+        <input type="number" id="cfg-maxchars" value="12000">
+      </div>
+      <div class="toolbar" style="margin-top:8px">
+        <label><input type="checkbox" id="cfg-enabled"> Enable model analysis</label>
+        <button onclick="saveConfig()">Save config</button>
+      </div>
+      <p class="muted" style="margin-top:6px;font-size:11px">Only redacted text is ever sent to a model. Capture + detect never depend on it.</p>
+    </div>
+    <div class="card">
+      <h2>Control plane <span class="hint">CLI actions from the UI</span></h2>
+      <div class="toolbar">
+        <button onclick="runAction('ingest','history')">Ingest history</button>
+        <button onclick="runAction('ingest','flight')">Ingest flight</button>
+        <button onclick="runAction('ingest','ps')">Ingest PS</button>
+        <button onclick="runAction('detect')">Run detectors</button>
+        <button onclick="runAction('agent-cycle')">Agent cycle</button>
+        <button onclick="runAction('win-events')">Win events</button>
+        <button onclick="runAction('collect','all')">Collect remotes</button>
+      </div>
+      <p class="muted" style="margin-top:8px;font-size:12px">Long actions run in the background — the message line shows the job id, then the result appears below.</p>
+      <div id="job-result" class="muted" style="margin-top:6px;word-break:break-all"></div>
+    </div>
+  </div>
+  <div class="card wide">
+    <h2>Detectors <span class="hint">rule-based alerting — offline, deterministic</span></h2>
+    <div class="toolbar">
+      <span class="muted">New rule</span>
+      <input type="text" id="det-name" style="width:130px" placeholder="my-rule">
+      <select id="det-sev">
+        <option>info</option><option>medium</option><option>high</option><option selected>critical</option>
+      </select>
+      <input type="text" id="det-match" style="width:220px" placeholder="\bpattern\b">
+      <button onclick="addDetector()">+ Add rule</button>
+    </div>
+    <div class="toolbar">
+      <span class="muted">Test regex</span>
+      <input type="text" id="det-sample" style="width:300px" placeholder="sample command to test against">
+      <button onclick="testDetector()">Test</button>
+      <span class="muted" id="det-test-result"></span>
+    </div>
+    <div style="max-height:420px; overflow:auto">
+      <table>
+        <thead><tr><th>Rule</th><th>Severity</th><th>Match</th><th>Window</th><th>Thresh</th><th></th></tr></thead>
+        <tbody id="det-rules"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card wide">
+    <h2>Remote hosts <span class="hint">agentless SSH collection</span></h2>
+    <div class="toolbar">
+      <input type="text" id="rm-name" style="width:110px" placeholder="name">
+      <input type="text" id="rm-host" style="width:180px" placeholder="host or IP">
+      <input type="text" id="rm-user" style="width:90px" placeholder="user">
+      <input type="number" id="rm-port" style="width:60px" value="22">
+      <button onclick="addRemote()">+ Add remote</button>
+    </div>
+    <table>
+      <thead><tr><th>Name</th><th>Host</th><th>User</th><th>Port</th><th></th></tr></thead>
+      <tbody id="rm-list"></tbody>
+    </table>
   </div>
 </div>
 
@@ -567,6 +654,143 @@ function previewReport(){
   window.open(reportUrl(), "_blank");
 }
 
+/* ---------- settings / control plane ---------- */
+function cfgFromUI(){
+  return {model: {
+    provider: $("cfg-provider").value,
+    model: $("cfg-model").value,
+    url: $("cfg-url").value,
+    timeout_s: parseInt($("cfg-timeout").value, 10) || 60,
+    max_input_chars: parseInt($("cfg-maxchars").value, 10) || 12000,
+    enabled: $("cfg-enabled").checked
+  }};
+}
+function cfgToUI(c){
+  const m = c.model || {};
+  $("cfg-provider").value = m.provider || "null";
+  $("cfg-model").value = m.model || "";
+  $("cfg-url").value = m.url || "";
+  $("cfg-timeout").value = m.timeout_s || 60;
+  $("cfg-maxchars").value = m.max_input_chars || 12000;
+  $("cfg-enabled").checked = !!m.enabled;
+}
+async function loadSettings(){
+  try {
+    const c = await j("/api/settings/config");
+    cfgToUI(c);
+    const d = await j("/api/settings/detectors");
+    renderDetectors(d.rules || []);
+    const r = await j("/api/settings/remotes");
+    renderRemotes(r.hosts || []);
+    $("settings-msg").textContent = "";
+    bump("settings");
+  } catch (e) { $("settings-msg").textContent = "error: " + e.message; }
+}
+function renderDetectors(rules){
+  const body = $("det-rules");
+  if (!rules.length){ body.innerHTML = '<tr><td colspan="6" class="empty">No rules.</td></tr>'; return; }
+  body.innerHTML = rules.map(r =>
+    "<tr><td>" + esc(r.name) + (r.enabled ? "" : ' <span class="muted">(off)</span>') + "</td>" +
+    "<td><span class='sev " + esc(r.severity) + "'>" + esc(r.severity) + "</span></td>" +
+    "<td class='cmd' style='max-width:280px'>" + esc(r.match) + "</td>" +
+    "<td>" + (r.window_s ? r.window_s + "s" : "–") + "</td>" +
+    "<td>" + (r.threshold || 1) + "</td>" +
+    "<td><button data-dtoggle='" + esc(r.name) + "'>" + (r.enabled ? "disable" : "enable") + "</button> " +
+    "<button data-ddel='" + esc(r.name) + "'>del</button></td></tr>").join("");
+}
+function renderRemotes(hosts){
+  const body = $("rm-list");
+  if (!hosts.length){ body.innerHTML = '<tr><td colspan="5" class="empty">No remotes.</td></tr>'; return; }
+  body.innerHTML = hosts.map(h =>
+    "<tr><td>" + esc(h.name) + "</td><td>" + esc(h.host) + "</td><td>" + esc(h.user || "–") + "</td><td>" + h.port + "</td>" +
+    "<td><button data-rtest='" + esc(h.name) + "'>test</button> <button data-rdel='" + esc(h.name) + "'>remove</button></td></tr>").join("");
+}
+async function saveConfig(){
+  try {
+    const r = await j("/api/settings/config", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({patch: cfgFromUI()})});
+    $("settings-msg").textContent = "config saved — provider " + ((r.model || {}).provider);
+    loadSettings();
+  } catch (e) { $("settings-msg").textContent = "error: " + e.message; }
+}
+async function addDetector(){
+  const rule = {
+    name: $("det-name").value.trim(),
+    severity: $("det-sev").value,
+    match: $("det-match").value.trim(),
+    window_s: null, threshold: 1,
+    message: "Pattern detected: '{}'",
+    description: "Custom rule added from UI"
+  };
+  if (!rule.name || !rule.match){ $("settings-msg").textContent = "name + regex required"; return; }
+  try {
+    const r = await j("/api/settings/detectors/add", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({rule: rule})});
+    $("settings-msg").textContent = r.error || ("added " + r.name);
+    loadSettings();
+  } catch (e) { $("settings-msg").textContent = "error: " + e.message; }
+}
+async function testDetector(){
+  try {
+    const r = await j("/api/settings/detectors/test", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({match: $("det-match").value, sample: $("det-sample").value})});
+    $("det-test-result").textContent = r.error || (r.match ? "✓ matches" : "✗ no match");
+  } catch (e) { $("det-test-result").textContent = "error: " + e.message; }
+}
+async function toggleDetector(name){
+  try {
+    await j("/api/settings/detectors/update", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: name, patch: {enabled: false}})});
+    loadSettings();
+  } catch (e) { $("settings-msg").textContent = "error: " + e.message; }
+}
+async function deleteDetector(name){
+  try {
+    await j("/api/settings/detectors/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: name})});
+    loadSettings();
+  } catch (e) { $("settings-msg").textContent = "error: " + e.message; }
+}
+async function addRemote(){
+  try {
+    const body = {name: $("rm-name").value.trim(), host: $("rm-host").value.trim(), user: $("rm-user").value.trim(), port: parseInt($("rm-port").value, 10) || 22};
+    if (!body.name || !body.host){ $("settings-msg").textContent = "name + host required"; return; }
+    const r = await j("/api/settings/remotes/add", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    $("settings-msg").textContent = r.error || ("added " + r.remote.name);
+    loadSettings();
+  } catch (e) { $("settings-msg").textContent = "error: " + e.message; }
+}
+async function testRemote(name){
+  try {
+    const r = await j("/api/settings/remotes/test", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: name})});
+    $("settings-msg").textContent = name + ": " + (r.error || (r.ok ? "OK — " + r.message : "FAILED — " + r.message));
+  } catch (e) { $("settings-msg").textContent = "error: " + e.message; }
+}
+async function removeRemote(name){
+  try {
+    await j("/api/settings/remotes/remove", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: name})});
+    loadSettings();
+  } catch (e) { $("settings-msg").textContent = "error: " + e.message; }
+}
+async function runAction(action, arg){
+  try {
+    const r = await j("/api/actions/" + action, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({arg: arg})});
+    $("settings-msg").textContent = action + " → " + (r.job_id ? "job " + r.job_id + " running…" : JSON.stringify(r));
+    if (r.job_id) setTimeout(loadJobResult, 2500, r.job_id);
+  } catch (e) { $("settings-msg").textContent = "error: " + e.message; }
+}
+async function loadJobResult(jid){
+  try {
+    const r = await j("/api/jobs/" + jid);
+    $("job-result").textContent = jid + " → " + r.status + (r.error ? " ERR: " + r.error : " " + JSON.stringify(r.result).slice(0, 300));
+  } catch (e) { $("job-result").textContent = "error: " + e.message; }
+}
+document.addEventListener("click", e => {
+  const t = e.target.closest ? e.target.closest("button[data-dtoggle]") : null;
+  if (t) toggleDetector(t.dataset.dtoggle);
+  const d = e.target.closest ? e.target.closest("button[data-ddel]") : null;
+  if (d) deleteDetector(d.dataset.ddel);
+  const rt = e.target.closest ? e.target.closest("button[data-rtest]") : null;
+  if (rt) testRemote(rt.dataset.rtest);
+  const rd = e.target.closest ? e.target.closest("button[data-rdel]") : null;
+  if (rd) removeRemote(rd.dataset.rdel);
+});
+
 function switchTab(name){
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".tabpane").forEach(p => p.classList.toggle("active", p.id === "tab-" + name));
@@ -576,6 +800,7 @@ function switchTab(name){
   if (name === "remotes") loadRemotes();
   if (name === "maint") loadMaint();
   if (name === "reports") loadReports();
+  if (name === "settings") loadSettings();
 }
 
 function fmt(ts){
@@ -599,6 +824,7 @@ setInterval(() => {
   if (active === "remotes") loadRemotes();
   if (active === "maint") loadMaint();
   if (active === "reports") loadReports();
+  if (active === "settings") loadSettings();
 }, 20000);
 
 $("lock").textContent = "live";
@@ -680,11 +906,24 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     body = reports.make_html_report(conn, since_days=days).encode("utf-8")
                     self._send(200, body, "text/html; charset=utf-8")
+            elif path == "/api/settings/config":
+                from . import settings
+                self._json(settings.get_config())
+            elif path == "/api/settings/detectors":
+                from . import settings
+                self._json(settings.get_detectors())
+            elif path == "/api/settings/remotes":
+                from . import settings
+                self._json({"hosts": settings.get_remotes()})
+            elif path.startswith("/api/jobs/"):
+                from . import settings
+                jid = path.rsplit("/", 1)[-1]
+                self._json(settings.job_status(jid))
+            elif path == "/api/actions/stats":
+                from . import settings
+                self._json(settings.action_stats())
             else:
-                self._json({"error": "not found"}, 
-
-
-404)
+                self._json({"error": "not found"}, 404)
         except Exception as exc:  # never leak internals to the client
             self._json({"error": type(exc).__name__}, 500)
         finally:
@@ -708,9 +947,77 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(retain(days=days))
             elif parsed.path.startswith("/api/maintenance/vacuum"):
                 self._json(vacuum())
+            elif parsed.path == "/api/settings/config":
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                from . import settings
+                self._json(settings.update_config(body.get("patch", body)))
+            elif parsed.path == "/api/settings/config/reset":
+                from . import settings
+                self._json(settings.reset_config())
+            elif parsed.path == "/api/settings/detectors/add":
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                from . import settings
+                self._json(settings.add_detector(body.get("rule", {})))
+            elif parsed.path == "/api/settings/detectors/update":
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                from . import settings
+                self._json(settings.update_detector(body.get("name", ""), body.get("patch", {})))
+            elif parsed.path == "/api/settings/detectors/delete":
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                from . import settings
+                self._json(settings.delete_detector(body.get("name", "")))
+            elif parsed.path == "/api/settings/detectors/test":
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                from . import settings
+                self._json(settings.test_detector(body.get("match", ""), body.get("sample", "")))
+            elif parsed.path == "/api/settings/remotes/add":
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                from . import settings
+                self._json(settings.add_remote(body.get("name", ""), body.get("host", ""),
+                                              body.get("user", ""), int(body.get("port", 22) or 22)))
+            elif parsed.path == "/api/settings/remotes/remove":
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                from . import settings
+                self._json(settings.remove_remote(body.get("name", "")))
+            elif parsed.path == "/api/settings/remotes/test":
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                from . import settings
+                self._json(settings.test_remote(body.get("name", "")))
+            elif parsed.path.startswith("/api/actions/"):
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                from . import settings
+                action = parsed.path.rsplit("/", 1)[-1]
+                arg = body.get("arg")
+                if action == "ingest":
+                    res = settings.start_job("ingest", settings.action_ingest,
+                                             history=(arg in (None, "history")),
+                                             flight=(arg == "flight"),
+                                             ps=(arg == "ps"))
+                elif action == "detect":
+                    res = settings.start_job("detect", settings.action_detect)
+                elif action == "collect":
+                    res = settings.start_job("collect", settings.action_collect_remote,
+                                             name=None, all_hosts=(arg == "all"))
+                elif action == "win-events":
+                    res = settings.start_job("win-events", settings.action_win_events)
+                elif action == "agent-cycle":
+                    res = settings.start_job("agent-cycle", settings.action_agent_cycle)
+                else:
+                    res = {"error": "unknown action"}
+                self._json(res)
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as exc:
+            import traceback as _tb; _tb.print_exc()
             self._json({"error": type(exc).__name__}, 500)
         finally:
             conn.close()
