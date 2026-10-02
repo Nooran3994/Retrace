@@ -1041,18 +1041,16 @@ def stats_for_api(conn) -> dict:
 
 
 def analytics_dashboard(conn, days: int = 30) -> dict:
-    """Everything the dashboard charts need, in one call."""
-    from . import analytics
+    """Everything the dashboard charts need, in one call.
 
-    return {
-        "overview": analytics.overview(conn),
-        "series": analytics.time_series(conn, bucket="day", since_days=days),
-        "hourly": analytics.hourly_profile(conn, since_days=days),
-        "weekday": analytics.weekday_profile(conn, since_days=days),
-        "usage": analytics.command_usage(conn, limit=25, since_days=days),
-        "top_commands": analytics.top_commands(conn, limit=20, since_days=days),
-        "heatmap": analytics.activity_heatmap(conn, days=days),
-    }
+    Summary-backed: refresh_summaries() folds new rows into the rollup
+    tables (no-op when nothing new), then all charts read the small
+    summary tables instead of full-table scans.
+    """
+    from . import summary
+
+    summary.refresh_summaries(conn)
+    return summary.summary_dashboard(conn, days=days)
 
 
 def records_for_api(conn, limit: int = 100, q: str = "") -> list[dict]:
